@@ -1,0 +1,250 @@
+/*
+ * guess_number -- Computer System Comprehensive Design, final project
+ *
+ * "Guess the number" game on the Loongson 1B.
+ *
+ * The board picks a secret number between 1 and 100 (seeded from the hardware
+ * timer) and the player types guesses on UART3 (PuTTY, COM7 @115200):
+ *
+ *   <number>      your guess
+ *   NEW           start a new game
+ *   HELP          command list
+ *
+ * The board answers HIGHER / LOWER / CORRECT and shows the current guess in
+ * binary on the eight LEDs (LED1 = bit0 ... LED8 = bit7, active low).
+ * When the game is won the LEDs blink.
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "ls1b.h"
+#include "mips.h"
+#include "ls1b_gpio.h"
+#include "ns16550.h"
+
+#define NUART 3
+static void *uarts[NUART];
+#include "bsp.h"
+
+#define GPIO_OUT   0
+#define BUF_SIZE   24
+#define MAX_TRIES  7
+#define RANGE_MIN  1
+#define RANGE_MAX  100
+
+static const int leds[8] = { 9, 11, 15, 17, 20, 22, 6, 7 };
+
+static unsigned int secret   = 0;
+static int          tries    = 0;
+static int          finished = 0;
+static char         buf[BUF_SIZE];
+static int          buf_len  = 0;
+
+/*----------------------------------------------------------------------------*/
+
+static void gpio_init(void)
+{
+    int i;
+    for (i = 0; i < 8; i++) gpio_enable(leds[i], GPIO_OUT);
+}
+
+/* show a value in binary on the LEDs (bit0 = LED1) */
+static void show_bits(unsigned int v)
+{
+    int i;
+    for (i = 0; i < 8; i++) gpio_write(leds[i], ((v >> i) & 1) ? 0 : 1);
+}
+
+static void leds_off(void)
+{
+    show_bits(0);
+}
+
+static void uart_init(void)
+{
+    int i;
+    uarts[0] = devUART3; uarts[1] = devUART4; uarts[2] = devUART5;
+    for (i = 0; i < NUART; i++) {
+        ls1x_uart_init(uarts[i], NULL);
+        ls1x_uart_open(uarts[i], NULL);
+    }
+}
+
+static void uart_puts(const char *s)
+{
+    int i;
+    for (i = 0; i < NUART; i++) ls1x_uart_write(uarts[i], s, (int)strlen(s), NULL);
+}
+
+static void uart_putc(char c)
+{
+    int i;
+    for (i = 0; i < NUART; i++) ls1x_uart_write(uarts[i], &c, 1, NULL);
+}
+
+/*----------------------------------------------------------------------------*/
+
+static void new_game(void)
+{
+    unsigned int seed;
+
+    /* seed from the hardware tick counter: changes every millisecond */
+    seed   = get_clock_ticks() ^ (get_clock_ticks() << 7);
+    secret = (seed % (RANGE_MAX - RANGE_MIN + 1)) + RANGE_MIN;
+
+    tries    = 0;
+    finished = 0;
+    leds_off();
+
+    uart_puts("\r\n  NEW GAME - I picked a number between 1 and 100.\r\n");
+    uart_puts("  You have ");
+    uart_putc((char)('0' + MAX_TRIES));
+    uart_puts(" tries. Enter a guess.\r\n");
+    uart_puts("  guess> ");
+}
+
+static void help(void)
+{
+    uart_puts("\r\n--- Guess the number ---\r\n");
+    uart_puts("  type a number 1..100  -> your guess\r\n");
+    uart_puts("  NEW                   -> new game\r\n");
+    uart_puts("  HELP                  -> this text\r\n");
+    uart_puts("  (the LEDs show your last guess in binary)\r\n");
+    uart_puts("  guess> ");
+}
+
+static void win_effect(void)
+{
+    int i, k;
+    for (k = 0; k < 3; k++)
+    {
+        for (i = 0; i < 8; i++) { show_bits(1u << i); delay_ms(120); }
+    }
+    leds_off();
+    show_bits((unsigned int)secret);
+}
+
+/*----------------------------------------------------------------------------*/
+
+static void normalize(char *s)
+{
+    int i;
+    for (i = 0; s[i]; i++)
+        if (s[i] >= 'a' && s[i] <= 'z') s[i] = (char)(s[i] - 32);
+}
+
+static void handle(void)
+{
+    char cmd[BUF_SIZE];
+    int  guess;
+
+    memcpy(cmd, buf, buf_len);
+    cmd[buf_len] = '\0';
+    buf_len = 0;
+
+    while (cmd[0] && (cmd[strlen(cmd) - 1] == '\r' || cmd[strlen(cmd) - 1] == ' '))
+        cmd[strlen(cmd) - 1] = '\0';
+
+    if (cmd[0] == '\0') { uart_puts("  guess> "); return; }
+
+    normalize(cmd);
+
+    if (strcmp(cmd, "HELP") == 0) { help();     return; }
+    if (strcmp(cmd, "NEW")  == 0) { new_game(); return; }
+
+    /* must be a number */
+    if (cmd[0] < '0' || cmd[0] > '9')
+    {
+        uart_puts("  ? type a number, NEW or HELP\r\n  guess> ");
+        return;
+    }
+
+    guess = atoi(cmd);
+    if (guess < RANGE_MIN || guess > RANGE_MAX)
+    {
+        uart_puts("  out of range (1..100)\r\n  guess> ");
+        return;
+    }
+    if (finished)
+    {
+        uart_puts("  game over - type NEW to play again\r\n  guess> ");
+        return;
+    }
+
+    tries++;
+    show_bits((unsigned int)guess);          /* LEDs show the guess     */
+
+    if (guess == (int)secret)
+    {
+        finished = 1;
+        uart_puts("  CORRECT!\r\n");
+        uart_puts("  you found it in ");
+        if (tries >= 10) uart_putc((char)('0' + tries / 10));
+        uart_putc((char)('0' + tries % 10));
+        uart_puts(" tries. type NEW for another game\r\n  guess> ");
+        win_effect();
+        return;
+    }
+
+    if (tries >= MAX_TRIES)
+    {
+        finished = 1;
+        uart_puts("  out of tries!  the number was ");
+        if (secret >= 100) uart_putc((char)('0' + secret / 100));
+        if (secret >= 10)  uart_putc((char)('0' + (secret / 10) % 10));
+        uart_putc((char)('0' + secret % 10));
+        uart_puts("\r\n  type NEW to play again\r\n  guess> ");
+        return;
+    }
+
+    if (guess < (int)secret) uart_puts("  HIGHER\r\n");
+    else                     uart_puts("  LOWER\r\n");
+
+    uart_puts("  tries left: ");
+    uart_putc((char)('0' + (MAX_TRIES - tries)));
+    uart_puts("\r\n  guess> ");
+}
+
+/*----------------------------------------------------------------------------*/
+
+int main(void)
+{
+    char byte;
+
+    ls1x_drv_init();
+    install_3th_libraries();
+
+    gpio_init();
+    uart_init();
+    leds_off();
+
+    uart_puts("\r\n\r\n=== Loongson 1B : Guess the Number ===\r\n");
+
+    new_game();
+
+    for (;;)
+    {
+        int got = 0;
+        int u;
+        for (u = 0; u < NUART; u++)
+            if (ls1x_uart_read(uarts[u], &byte, 1, 1) > 0) { got = 1; break; }
+        if (got)
+        {
+            if (byte == '\n' || byte == '\r')
+                handle();
+            else if (buf_len < BUF_SIZE - 1)
+            {
+                buf[buf_len++] = byte;
+                uart_putc(byte);              /* local echo */
+            }
+        }
+    }
+
+    return 0;
+}
+
+/*
+ * @@ End
+ */

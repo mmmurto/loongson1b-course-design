@@ -1,0 +1,14 @@
+# build output
+_obj/
+Build/
+*.exe
+*.bin
+*.o
+*.map
+*.layout
+# backups
+*.backup
+*.orig
+# OS
+Thumbs.db
+desktop.ini

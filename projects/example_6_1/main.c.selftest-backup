@@ -1,0 +1,53 @@
+/*
+ * example_6_1 - LED bring-up test (chapter 6)
+ * Lights LED1..LED8 one by one, no serial commands needed.
+ * Restore the guide's serial version with main.c.guide-backup
+ */
+
+#include <stdio.h>
+#include "ls1b.h"
+#include "mips.h"
+#include "ls1b_gpio.h"
+#include "bsp.h"
+
+#define LED_1 9
+#define LED_2 11
+#define LED_3 15
+#define LED_4 17
+#define LED_5 20
+#define LED_6 22
+#define LED_7 6
+#define LED_8 7
+#define GPIO_OUT 0
+
+static const int leds[8] = {LED_1, LED_2, LED_3, LED_4, LED_5, LED_6, LED_7, LED_8};
+
+static void all_off(void)
+{
+    int i;
+    for (i = 0; i < 8; i++) gpio_write(leds[i], 1);
+}
+
+int main(void)
+{
+    int i;
+
+    ls1x_drv_init();
+    install_3th_libraries();
+
+    for (i = 0; i < 8; i++) gpio_enable(leds[i], GPIO_OUT);
+    all_off();
+
+    for (;;)
+    {
+        for (i = 0; i < 8; i++)
+        {
+            all_off();
+            gpio_write(leds[i], 0);      /* active low = ON */
+            delay_ms(400);
+        }
+        all_off();
+        delay_ms(400);
+    }
+    return 0;
+}
