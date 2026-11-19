@@ -1,0 +1,1 @@
+ERR: Exception calling "Connect" with "2" argument(s): "A connection attempt failed because the connected party did not properly respond after a period of time, or established connection failed because connected host has failed to respond 192.168.1.123:9060"

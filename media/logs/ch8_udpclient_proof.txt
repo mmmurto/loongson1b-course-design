@@ -1,0 +1,4 @@
+=== UDP 9063 listener 10:32:48 ===
+[10:32:48] bound to UDP 9063, waiting for the board (192.168.1.123)...
+[10:33:12] UDP <- board 192.168.1.123:49153 sent 20 bytes : 'client ticks = 2004.'
+[10:33:12] UDP -> sent reply to the board
